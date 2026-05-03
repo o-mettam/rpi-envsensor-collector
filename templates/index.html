@@ -385,63 +385,6 @@
         .toast.success { border-color: var(--green); }
         .toast.error { border-color: var(--red); }
 
-        /* Confirm dialog */
-        .confirm-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.6);
-            z-index: 2001;
-            align-items: center;
-            justify-content: center;
-        }
-        .confirm-overlay.open { display: flex; }
-        .confirm-dialog {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1.5rem;
-            max-width: 360px;
-            width: 90vw;
-            text-align: center;
-        }
-        .confirm-dialog h3 {
-            font-size: 1rem;
-            margin-bottom: 0.5rem;
-            color: var(--text);
-        }
-        .confirm-dialog p {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-bottom: 1.25rem;
-            line-height: 1.4;
-        }
-        .confirm-dialog .btn-row {
-            display: flex;
-            gap: 0.75rem;
-            justify-content: center;
-        }
-        .confirm-dialog button {
-            padding: 0.5rem 1.25rem;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            font-size: 0.85rem;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .confirm-dialog .btn-cancel {
-            background: var(--bg);
-            color: var(--text);
-        }
-        .confirm-dialog .btn-confirm {
-            background: var(--red);
-            color: white;
-            border-color: var(--red);
-        }
-        .confirm-dialog .btn-confirm.accent {
-            background: var(--accent);
-            border-color: var(--accent);
-        }
     </style>
 </head>
 <body>
@@ -485,32 +428,24 @@
 
     <div class="settings-section">
         <h3>Device</h3>
-        <div class="settings-item" onclick="confirmAction('restart')">
-            <span class="item-label">
-                <span class="item-icon">&#9850;</span>
-                Restart Device
-            </span>
-            <span class="item-arrow">&#8250;</span>
-        </div>
-        <div class="settings-item danger" onclick="confirmAction('shutdown')">
-            <span class="item-label">
-                <span class="item-icon">&#9211;</span>
-                Shutdown Device
-            </span>
-            <span class="item-arrow">&#8250;</span>
-        </div>
-    </div>
-</div>
-
-<!-- Confirm dialog -->
-<div class="confirm-overlay" id="confirm-overlay">
-    <div class="confirm-dialog">
-        <h3 id="confirm-title">Are you sure?</h3>
-        <p id="confirm-message"></p>
-        <div class="btn-row">
-            <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
-            <button class="btn-confirm" id="confirm-btn" onclick="executeConfirmed()">Confirm</button>
-        </div>
+        <form method="POST" action="/api/restart" onsubmit="return confirm('Restart the device? You will lose connection temporarily.')">
+            <button type="submit" class="settings-item" style="width:100%;text-align:left;font:inherit;cursor:pointer;">
+                <span class="item-label">
+                    <span class="item-icon">&#9850;</span>
+                    Restart Device
+                </span>
+                <span class="item-arrow">&#8250;</span>
+            </button>
+        </form>
+        <form method="POST" action="/api/shutdown" onsubmit="return confirm('Shutdown the device? You will need physical access to turn it back on.')">
+            <button type="submit" class="settings-item danger" style="width:100%;text-align:left;font:inherit;cursor:pointer;">
+                <span class="item-label">
+                    <span class="item-icon">&#9211;</span>
+                    Shutdown Device
+                </span>
+                <span class="item-arrow">&#8250;</span>
+            </button>
+        </form>
     </div>
 </div>
 
@@ -711,7 +646,7 @@
 {% endif %}
 
 <div class="footer">
-    Waveshare Environment Sensor HAT &middot; Raspberry Pi
+    Built by Owen Mettam &middot; <a href="https://github.com/o-mettam/rpi-envsensor-collector" style="color:var(--accent);text-decoration:none;">GitHub</a>
 </div>
 
 <script>
@@ -753,46 +688,6 @@
         t.textContent = msg;
         t.className = 'toast ' + (type || '') + ' show';
         setTimeout(() => { t.classList.remove('show'); }, 4000);
-    }
-
-    // ---- Confirm dialog ----
-    let pendingAction = null;
-    function confirmAction(action) {
-        pendingAction = action;
-        const title = document.getElementById('confirm-title');
-        const msg = document.getElementById('confirm-message');
-        const btn = document.getElementById('confirm-btn');
-        if (action === 'restart') {
-            title.textContent = 'Restart Device?';
-            msg.textContent = 'The device will reboot. You will lose connection temporarily.';
-            btn.textContent = 'Restart';
-            btn.className = 'btn-confirm accent';
-        } else if (action === 'shutdown') {
-            title.textContent = 'Shutdown Device?';
-            msg.textContent = 'The device will power off. You will need physical access to turn it back on.';
-            btn.textContent = 'Shutdown';
-            btn.className = 'btn-confirm';
-        }
-        document.getElementById('confirm-overlay').classList.add('open');
-    }
-    function closeConfirm() {
-        document.getElementById('confirm-overlay').classList.remove('open');
-        pendingAction = null;
-    }
-    function executeConfirmed() {
-        closeConfirm();
-        if (pendingAction === 'restart') {
-            fetch('/api/restart', { method: 'POST' })
-                .then(r => r.json())
-                .then(d => showToast(d.message, 'success'))
-                .catch(() => showToast('Failed to send restart command', 'error'));
-        } else if (pendingAction === 'shutdown') {
-            fetch('/api/shutdown', { method: 'POST' })
-                .then(r => r.json())
-                .then(d => showToast(d.message, 'success'))
-                .catch(() => showToast('Failed to send shutdown command', 'error'));
-        }
-        toggleSettings();
     }
 
     // ---- Software update ----

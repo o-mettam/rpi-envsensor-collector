@@ -99,27 +99,34 @@ def init_sensors(bus):
     sensors = {}
     errors = {}
 
+    log.info("Initializing %d sensors...", len(SENSOR_CLASSES))
     for name, cls in SENSOR_CLASSES:
         try:
+            log.debug("  Initializing %s (class=%s)...", name.upper(), cls.__name__)
             sensors[name] = cls(bus)
-            log.info("Initialized %s", name.upper())
+            log.info("  [OK] %s initialized successfully", name.upper())
         except Exception as e:
-            log.warning("Failed to initialize %s: %s", name.upper(), e)
+            log.warning("  [FAIL] %s: %s", name.upper(), e)
             sensors[name] = None
             errors[name] = str(e)
 
+    log.info("Sensor init complete: %d OK, %d failed",
+             sum(1 for v in sensors.values() if v is not None),
+             len(errors))
     return sensors, errors
 
 
 def retry_failed_sensors(bus, sensors, errors):
     """Attempt to re-initialize any sensors that previously failed."""
     cls_map = dict(SENSOR_CLASSES)
+    log.info("Retrying %d failed sensor(s): %s", len(errors), ", ".join(errors.keys()))
     for name in list(errors.keys()):
         try:
             sensors[name] = cls_map[name](bus)
-            log.info("Recovered %s", name.upper())
+            log.info("  [RECOVERED] %s is now available", name.upper())
             del errors[name]
         except Exception as e:
+            log.debug("  [STILL FAILED] %s: %s", name.upper(), e)
             errors[name] = str(e)
     return sensors, errors
 
@@ -127,14 +134,20 @@ def retry_failed_sensors(bus, sensors, errors):
 def read_all_sensors(sensors):
     """Read from all initialized sensors and return a flat dict of values."""
     row = {}
+    read_ok = []
+    read_fail = []
 
     # BME280 - temperature, humidity, pressure
     if sensors.get("bme280"):
         try:
             data = sensors["bme280"].read()
             row.update(data)
+            log.debug("  BME280: temp=%.1f°C hum=%.1f%% press=%.1fhPa",
+                      data.get("temperature_c", 0), data.get("humidity_pct", 0), data.get("pressure_hpa", 0))
+            read_ok.append("BME280")
         except Exception as e:
-            log.error("BME280 read error: %s", e)
+            log.error("  BME280 read error: %s", e)
+            read_fail.append("BME280")
 
     # TSL2591 - ambient light
     if sensors.get("tsl2591"):
@@ -143,16 +156,23 @@ def read_all_sensors(sensors):
             row["lux"] = data["lux"]
             row["visible"] = data["visible"]
             row["infrared"] = data["infrared"]
+            log.debug("  TSL2591: lux=%.1f vis=%s ir=%s", data["lux"], data["visible"], data["infrared"])
+            read_ok.append("TSL2591")
         except Exception as e:
-            log.error("TSL2591 read error: %s", e)
+            log.error("  TSL2591 read error: %s", e)
+            read_fail.append("TSL2591")
 
     # LTR390 - UV + ALS
     if sensors.get("ltr390"):
         try:
             data = sensors["ltr390"].read()
             row.update(data)
+            log.debug("  LTR390: uv_index=%.2f uv_raw=%s als_lux=%.1f",
+                      data.get("uv_index", 0), data.get("uv_raw", 0), data.get("als_lux", 0))
+            read_ok.append("LTR390")
         except Exception as e:
-            log.error("LTR390 read error: %s", e)
+            log.error("  LTR390 read error: %s", e)
+            read_fail.append("LTR390")
 
     # SGP40 - VOC (compensated with BME280 temp/humidity if available)
     if sensors.get("sgp40"):
@@ -163,8 +183,12 @@ def read_all_sensors(sensors):
                 humidity_pct=hum, temperature_c=temp
             )
             row.update(data)
+            log.debug("  SGP40: voc_raw=%s voc_index=%s (comp: temp=%.1f hum=%.1f)",
+                      data.get("voc_raw"), data.get("voc_index"), temp, hum)
+            read_ok.append("SGP40")
         except Exception as e:
-            log.error("SGP40 read error: %s", e)
+            log.error("  SGP40 read error: %s", e)
+            read_fail.append("SGP40")
 
     # ICM20948 - motion
     if sensors.get("icm20948"):
@@ -173,9 +197,16 @@ def read_all_sensors(sensors):
             # Exclude the ICM die temperature (we use BME280 instead)
             data.pop("temperature_c", None)
             row.update(data)
+            log.debug("  ICM20948: accel=(%.2f,%.2f,%.2f)g",
+                      data.get("accel_x_g", 0), data.get("accel_y_g", 0), data.get("accel_z_g", 0))
+            read_ok.append("ICM20948")
         except Exception as e:
-            log.error("ICM20948 read error: %s", e)
+            log.error("  ICM20948 read error: %s", e)
+            read_fail.append("ICM20948")
 
+    log.info("Sensor reads: %d OK [%s]%s",
+             len(read_ok), ", ".join(read_ok) if read_ok else "none",
+             " | %d FAILED [%s]" % (len(read_fail), ", ".join(read_fail)) if read_fail else "")
     return row
 
 
@@ -196,6 +227,7 @@ def append_row(csv_path, row):
     with open(csv_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         writer.writerow(row)
+    log.info("CSV row written to %s (%d fields)", csv_path, len(row))
 
 
 def write_status(csv_path, sensors, errors):
@@ -211,6 +243,8 @@ def write_status(csv_path, sensors, errors):
     try:
         with open(status_path, "w") as f:
             json.dump(status, f, indent=2)
+        log.debug("Status file written: %s (active=%d, failed=%d)",
+                  status_path, len(active), len(errors))
     except Exception as e:
         log.error("Failed to write status file: %s", e)
 
@@ -247,11 +281,20 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    log.info("Starting Environment Sensor Collector")
-    log.info("CSV output: %s", args.csv)
-    log.info("Interval: %d seconds", args.interval)
+    log.info("========================================")
+    log.info(" Environment Sensor Collector")
+    log.info("========================================")
+    log.info("CSV output:  %s", args.csv)
+    log.info("Interval:    %d seconds", args.interval)
+    log.info("I2C bus:     %d", args.bus)
+    log.info("Single shot: %s", args.once)
+    log.info("PID:         %d", os.getpid())
+    log.info("User:        uid=%d", os.getuid())
+    log.info("========================================")
 
+    log.info("Opening I2C bus %d...", args.bus)
     bus = smbus2.SMBus(args.bus)
+    log.info("I2C bus %d opened successfully", args.bus)
 
     try:
         sensors, errors = init_sensors(bus)
@@ -287,6 +330,7 @@ def main():
                     row.get("uv_index", 0),
                     row.get("voc_raw", "N/A"),
                 )
+                log.info("Next reading in %d seconds", args.interval)
             else:
                 log.warning("No active sensors — skipping this cycle")
 
@@ -301,8 +345,11 @@ def main():
                     break
                 time.sleep(1)
 
+    except Exception as e:
+        log.exception("Unhandled exception in main loop: %s", e)
     finally:
         bus.close()
+        log.info("I2C bus closed")
         log.info("Collector stopped.")
 
 

@@ -22,13 +22,46 @@ from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
 
-log = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("envsensor-web")
 
 DEFAULT_CSV_PATH = os.path.expanduser("~/envdata/sensor_data.csv")
 DEFAULT_PORT = 80
 
 app = Flask(__name__, template_folder="templates")
 csv_path = DEFAULT_CSV_PATH
+
+
+@app.before_request
+def log_request():
+    """Log every incoming HTTP request."""
+    log.info(
+        ">>> %s %s from %s (User-Agent: %s)",
+        request.method,
+        request.url,
+        request.remote_addr,
+        request.headers.get("User-Agent", "unknown"),
+    )
+    if request.method == "POST":
+        log.info("    Content-Type: %s, Content-Length: %s",
+                 request.content_type, request.content_length)
+
+
+@app.after_request
+def log_response(response):
+    """Log every outgoing HTTP response."""
+    log.info(
+        "<<< %s %s -> %s (%s bytes)",
+        request.method,
+        request.path,
+        response.status,
+        response.content_length or 0,
+    )
+    return response
 
 
 def read_csv_data(limit=None):
@@ -95,6 +128,10 @@ def index():
     """Main dashboard page."""
     latest = get_latest_reading()
     status = read_status()
+    log.info("Dashboard: latest=%s, status_ok=%s, active_sensors=%s",
+             "yes" if latest else "no",
+             status.get("all_ok"),
+             status.get("active_sensors", []))
     return render_template("index.html", latest=latest, status=status)
 
 
@@ -103,7 +140,9 @@ def api_latest():
     """API endpoint: latest sensor reading as JSON."""
     latest = get_latest_reading()
     if latest:
+        log.info("API /api/latest: returning reading from %s", latest.get("timestamp", "?"))
         return jsonify(latest)
+    log.warning("API /api/latest: no data available")
     return jsonify({"error": "No data available"}), 404
 
 
@@ -111,6 +150,7 @@ def api_latest():
 def api_data():
     """API endpoint: all sensor data as JSON (newest first)."""
     rows = read_csv_data()
+    log.info("API /api/data: returning %d rows", len(rows))
     return jsonify(rows)
 
 
@@ -118,6 +158,7 @@ def api_data():
 def api_data_limited(count):
     """API endpoint: last N sensor readings as JSON."""
     rows = read_csv_data(limit=count)
+    log.info("API /api/data/%d: returning %d rows", count, len(rows))
     return jsonify(rows)
 
 
@@ -126,11 +167,13 @@ def download_csv():
     """Serve the raw CSV file for download."""
     path = Path(csv_path)
     if not path.exists():
+        log.warning("CSV download requested but file not found: %s", path)
         return "No data file found.", 404
 
     with open(path, "r") as f:
         content = f.read()
 
+    log.info("CSV download: %d bytes", len(content))
     return content, 200, {
         "Content-Type": "text/csv",
         "Content-Disposition": "attachment; filename=sensor_data.csv",
@@ -140,11 +183,14 @@ def download_csv():
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
     """Restart the Raspberry Pi."""
+    log.info("Reboot requested from %s", request.remote_addr)
     def do_restart():
         import time
         time.sleep(2)
-        log.info("Executing system reboot...")
-        os.system("systemctl reboot")
+        log.info("Executing system reboot now...")
+        ret = os.system("systemctl reboot")
+        if ret != 0:
+            log.error("systemctl reboot returned exit code %d", ret)
     threading.Thread(target=do_restart, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is restarting..."})
 
@@ -152,11 +198,14 @@ def api_restart():
 @app.route("/api/shutdown", methods=["POST"])
 def api_shutdown():
     """Shut down the Raspberry Pi."""
+    log.info("Shutdown requested from %s", request.remote_addr)
     def do_shutdown():
         import time
         time.sleep(2)
-        log.info("Executing system shutdown...")
-        os.system("systemctl poweroff")
+        log.info("Executing system shutdown now...")
+        ret = os.system("systemctl poweroff")
+        if ret != 0:
+            log.error("systemctl poweroff returned exit code %d", ret)
     threading.Thread(target=do_shutdown, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is shutting down..."})
 
@@ -180,12 +229,15 @@ def api_update():
             repo_dir = candidate
 
     if not repo_dir:
+        log.error("Update requested but git repository not found under /home/*/")
         return jsonify({"status": "error", "message": "Git repository not found."}), 404
 
     update_script = repo_dir / "update.sh"
     if not update_script.exists():
+        log.error("Update requested but update.sh not found at %s", update_script)
         return jsonify({"status": "error", "message": "update.sh not found."}), 404
 
+    log.info("Software update requested from %s — repo: %s", request.remote_addr, repo_dir)
     try:
         result = subprocess.run(
             ["/bin/bash", str(update_script)],
@@ -194,6 +246,14 @@ def api_update():
             text=True,
             timeout=120,
         )
+        if result.returncode == 0:
+            log.info("Update completed successfully")
+        else:
+            log.error("Update failed (exit code %d): %s", result.returncode, result.stderr[-500:] if result.stderr else "")
+        if result.stdout:
+            log.info("Update stdout:\n%s", result.stdout[-2000:])
+        if result.stderr:
+            log.warning("Update stderr:\n%s", result.stderr[-1000:])
         return jsonify({
             "status": "ok" if result.returncode == 0 else "error",
             "message": result.stdout[-2000:] if result.stdout else "",
@@ -201,8 +261,10 @@ def api_update():
             "returncode": result.returncode,
         })
     except subprocess.TimeoutExpired:
+        log.error("Update timed out after 120 seconds")
         return jsonify({"status": "error", "message": "Update timed out."}), 504
     except Exception as e:
+        log.exception("Update failed with exception: %s", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -232,8 +294,15 @@ def main():
     global csv_path
     csv_path = args.csv
 
-    print(f"Starting web dashboard on port {args.port}")
-    print(f"Reading data from: {args.csv}")
+    log.info("========================================")
+    log.info(" Environment Sensor Web Dashboard")
+    log.info("========================================")
+    log.info("CSV path:  %s", args.csv)
+    log.info("Port:      %d", args.port)
+    log.info("Debug:     %s", args.debug)
+    log.info("PID:       %d", os.getpid())
+    log.info("User:      %s (uid=%d)", os.environ.get('USER', 'unknown'), os.getuid())
+    log.info("========================================")
     app.run(host="0.0.0.0", port=args.port, debug=args.debug)
 
 
