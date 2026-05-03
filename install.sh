@@ -97,17 +97,16 @@ cat > /etc/systemd/system/envsensor-collector.service << EOF
 [Unit]
 Description=Environment Sensor HAT Data Collector
 After=multi-user.target
-Wants=network.target
-StartLimitBurst=5
-StartLimitIntervalSec=300
+StartLimitBurst=10
+StartLimitIntervalSec=600
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 10
+ExecStartPre=/bin/sleep 15
 ExecStart=${VENV_DIR}/bin/python3 ${INSTALL_DIR}/collector.py --csv ${DATA_DIR}/sensor_data.csv --interval 300
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
-RestartSec=30
+RestartSec=10
 User=root
 StandardOutput=journal
 StandardError=journal
@@ -121,17 +120,18 @@ echo "[6/7] Installing web dashboard service..."
 cat > /etc/systemd/system/envsensor-web.service << EOF
 [Unit]
 Description=Environment Sensor HAT Web Dashboard
-After=network.target envsensor-collector.service
-StartLimitBurst=5
-StartLimitIntervalSec=300
+After=multi-user.target envsensor-collector.service
+Wants=envsensor-collector.service
+StartLimitBurst=10
+StartLimitIntervalSec=600
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/sleep 10
 ExecStart=${VENV_DIR}/bin/python3 ${INSTALL_DIR}/web_server.py --csv ${DATA_DIR}/sensor_data.csv --port 80
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
-RestartSec=10
+RestartSec=5
 User=root
 StandardOutput=journal
 StandardError=journal
