@@ -50,7 +50,7 @@ echo " Interface: ${WIFI_INTERFACE}"
 echo ""
 
 # --- Install required packages ---
-echo "[1/6] Installing hostapd and dnsmasq..."
+echo "[1/7] Installing hostapd and dnsmasq..."
 apt-get update -qq
 apt-get install -y hostapd dnsmasq
 
@@ -59,29 +59,44 @@ systemctl stop hostapd 2>/dev/null || true
 systemctl stop dnsmasq 2>/dev/null || true
 
 # --- Unblock Wi-Fi ---
-echo "[2/6] Unblocking Wi-Fi..."
+echo "[2/7] Unblocking Wi-Fi..."
 rfkill unblock wlan 2>/dev/null || true
 
-# --- Configure static IP for wlan0 ---
-echo "[3/6] Configuring static IP for ${WIFI_INTERFACE}..."
+# --- Free port 53 from systemd-resolved ---
+echo "[3/7] Checking for port 53 conflicts..."
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    echo "  Disabling systemd-resolved stub listener (port 53 conflict)..."
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/no-stub.conf << EOF
+[Resolve]
+DNSStubListener=no
+EOF
+    systemctl restart systemd-resolved
+    # Point resolv.conf to resolved's full resolver (not the stub)
+    ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null || true
+    echo "  Done."
+else
+    echo "  systemd-resolved not active, no conflict."
+fi
 
-# Detect whether we're on Bookworm (NetworkManager) or Bullseye (dhcpcd)
-if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-    echo "  Detected NetworkManager (Bookworm) - configuring via nmcli"
+# --- Configure static IP via a dedicated systemd service ---
+echo "[4/7] Configuring static IP for ${WIFI_INTERFACE}..."
 
-    # Tell NetworkManager to ignore wlan0 so hostapd can manage it
-    NM_UNMANAGED_CONF="/etc/NetworkManager/conf.d/99-envsensor-unmanaged.conf"
-    cat > "$NM_UNMANAGED_CONF" << EOF
+# Tell NetworkManager to ignore wlan0 if present (Bookworm)
+if systemctl is-enabled --quiet NetworkManager 2>/dev/null; then
+    echo "  Telling NetworkManager to ignore ${WIFI_INTERFACE}..."
+    mkdir -p /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/99-envsensor-unmanaged.conf << EOF
 [keyfile]
 unmanaged-devices=interface-name:${WIFI_INTERFACE}
 EOF
     systemctl restart NetworkManager
     sleep 2
-else
-    echo "  Detected dhcpcd (Bullseye) - configuring via dhcpcd.conf"
+fi
 
-    # Backup and configure dhcpcd
-    DHCPCD_CONF="/etc/dhcpcd.conf"
+# Tell dhcpcd to ignore wlan0 if present (Bullseye)
+DHCPCD_CONF="/etc/dhcpcd.conf"
+if [ -f "$DHCPCD_CONF" ]; then
     if ! grep -q "# EnvSensor AP Config" "$DHCPCD_CONF" 2>/dev/null; then
         cp "$DHCPCD_CONF" "${DHCPCD_CONF}.backup.envsensor" 2>/dev/null || true
         cat >> "$DHCPCD_CONF" << EOF
@@ -94,41 +109,66 @@ EOF
     fi
 fi
 
-# Always assign the static IP directly to ensure it's set now
+# Create a systemd service that reliably assigns the static IP on every boot
+# This runs BEFORE hostapd and dnsmasq to eliminate race conditions
+cat > /etc/systemd/system/envsensor-ap-ip.service << EOF
+[Unit]
+Description=Assign static IP to ${WIFI_INTERFACE} for EnvSensor AP
+Before=hostapd.service dnsmasq.service
+After=sys-subsystem-net-devices-${WIFI_INTERFACE}.device
+Wants=sys-subsystem-net-devices-${WIFI_INTERFACE}.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ip addr flush dev ${WIFI_INTERFACE}
+ExecStart=/sbin/ip addr add ${AP_IP}/24 dev ${WIFI_INTERFACE}
+ExecStart=/sbin/ip link set ${WIFI_INTERFACE} up
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Assign the IP right now too
 ip addr flush dev "${WIFI_INTERFACE}" 2>/dev/null || true
 ip addr add "${AP_IP}/24" dev "${WIFI_INTERFACE}" 2>/dev/null || true
 ip link set "${WIFI_INTERFACE}" up
 
 # --- Configure dnsmasq (DHCP server) ---
-echo "[4/6] Configuring dnsmasq..."
+echo "[5/7] Configuring dnsmasq..."
 
 DNSMASQ_CONF="/etc/dnsmasq.conf"
 cp "$DNSMASQ_CONF" "${DNSMASQ_CONF}.backup.envsensor" 2>/dev/null || true
 
 cat > "$DNSMASQ_CONF" << EOF
 # EnvSensor DHCP Configuration
+# bind-dynamic: binds to wlan0 dynamically — works even if the IP
+# isn't assigned yet when dnsmasq starts (avoids race condition)
 interface=${WIFI_INTERFACE}
-bind-interfaces
-listen-address=${AP_IP}
+bind-dynamic
+no-resolv
+no-hosts
 dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${AP_NETMASK},${DHCP_LEASE}
 dhcp-option=option:router,${AP_IP}
 dhcp-option=option:dns-server,${AP_IP}
+dhcp-authoritative
 domain=local
 address=/envsensor.local/${AP_IP}
+address=/#/${AP_IP}
 log-queries
 log-dhcp
 EOF
 
-# Prevent dnsmasq from reading /etc/resolv.conf (avoids port 53 conflicts)
+# Make dnsmasq wait for hostapd + IP assignment
 mkdir -p /etc/systemd/system/dnsmasq.service.d
 cat > /etc/systemd/system/dnsmasq.service.d/envsensor.conf << EOF
 [Unit]
-After=hostapd.service
-BindsTo=hostapd.service
+After=hostapd.service envsensor-ap-ip.service
+Wants=envsensor-ap-ip.service
 EOF
 
 # --- Configure hostapd (Access Point) ---
-echo "[5/6] Configuring hostapd..."
+echo "[6/7] Configuring hostapd..."
 
 HOSTAPD_CONF="/etc/hostapd/hostapd.conf"
 cat > "$HOSTAPD_CONF" << EOF
@@ -155,18 +195,50 @@ if [ -f "$HOSTAPD_DEFAULT" ]; then
     sed -i 's|^DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' "$HOSTAPD_DEFAULT"
 fi
 
+# Make hostapd wait for the IP assignment service
+mkdir -p /etc/systemd/system/hostapd.service.d
+cat > /etc/systemd/system/hostapd.service.d/envsensor.conf << EOF
+[Unit]
+After=envsensor-ap-ip.service
+Wants=envsensor-ap-ip.service
+EOF
+
 # --- Enable and start services ---
-echo "[6/6] Enabling and starting services..."
+echo "[7/7] Enabling and starting services..."
 
 systemctl daemon-reload
 systemctl unmask hostapd
+systemctl enable envsensor-ap-ip.service
 systemctl enable hostapd
 systemctl enable dnsmasq
 
-# Start now so the user can test without rebooting
-systemctl start hostapd
-sleep 2
-systemctl start dnsmasq
+# Start in the correct order
+echo "  Starting AP IP assignment..."
+systemctl restart envsensor-ap-ip.service
+sleep 1
+
+echo "  Starting hostapd..."
+systemctl restart hostapd
+sleep 3
+
+echo "  Starting dnsmasq..."
+systemctl restart dnsmasq
+sleep 1
+
+# Verify dnsmasq is actually running
+if systemctl is-active --quiet dnsmasq; then
+    echo "  dnsmasq is running."
+else
+    echo ""
+    echo "  WARNING: dnsmasq failed to start. Checking logs:"
+    journalctl -u dnsmasq --no-pager -n 10
+    echo ""
+fi
+
+# Verify the IP is on the interface
+echo ""
+echo "  Interface status:"
+ip addr show dev "${WIFI_INTERFACE}" | grep "inet "
 
 echo ""
 echo "========================================"
@@ -184,10 +256,12 @@ echo " Verify DHCP is working:"
 echo "   sudo journalctl -u dnsmasq -f"
 echo ""
 echo " To undo this setup:"
-echo "   sudo systemctl disable hostapd dnsmasq"
-echo "   sudo systemctl stop hostapd dnsmasq"
+echo "   sudo systemctl disable --now hostapd dnsmasq envsensor-ap-ip"
 echo "   sudo cp /etc/dnsmasq.conf.backup.envsensor /etc/dnsmasq.conf"
+echo "   sudo rm -f /etc/systemd/system/envsensor-ap-ip.service"
+echo "   sudo rm -rf /etc/systemd/system/dnsmasq.service.d/envsensor.conf"
+echo "   sudo rm -rf /etc/systemd/system/hostapd.service.d/envsensor.conf"
 echo "   sudo rm -f /etc/NetworkManager/conf.d/99-envsensor-unmanaged.conf"
-echo "   sudo rm -f /etc/systemd/system/dnsmasq.service.d/envsensor.conf"
-echo "   sudo reboot"
+echo "   sudo rm -f /etc/systemd/resolved.conf.d/no-stub.conf"
+echo "   sudo systemctl daemon-reload && sudo reboot"
 echo ""
