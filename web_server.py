@@ -14,10 +14,12 @@ import argparse
 import csv
 import json
 import os
+import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 
 DEFAULT_CSV_PATH = os.path.expanduser("~/envdata/sensor_data.csv")
 DEFAULT_PORT = 80
@@ -130,6 +132,70 @@ def download_csv():
         "Content-Type": "text/csv",
         "Content-Disposition": "attachment; filename=sensor_data.csv",
     }
+
+
+@app.route("/api/restart", methods=["POST"])
+def api_restart():
+    """Restart the Raspberry Pi."""
+    def do_restart():
+        import time
+        time.sleep(2)
+        subprocess.run(["sudo", "reboot"], check=False)
+    threading.Thread(target=do_restart, daemon=True).start()
+    return jsonify({"status": "ok", "message": "Device is restarting..."})
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def api_shutdown():
+    """Shut down the Raspberry Pi."""
+    def do_shutdown():
+        import time
+        time.sleep(2)
+        subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
+    threading.Thread(target=do_shutdown, daemon=True).start()
+    return jsonify({"status": "ok", "message": "Device is shutting down..."})
+
+
+@app.route("/api/update", methods=["POST"])
+def api_update():
+    """Pull latest code and redeploy via update.sh."""
+    install_dir = Path("/opt/envsensor-collector")
+    # Look for the git repo in common locations
+    repo_candidates = [
+        Path.home() / "rpi-envsensor-collector",
+        Path("/home") / "pi" / "rpi-envsensor-collector",
+    ]
+    repo_dir = None
+    for candidate in repo_candidates:
+        if (candidate / ".git").is_dir():
+            repo_dir = candidate
+            break
+
+    if not repo_dir:
+        return jsonify({"status": "error", "message": "Git repository not found."}), 404
+
+    update_script = repo_dir / "update.sh"
+    if not update_script.exists():
+        return jsonify({"status": "error", "message": "update.sh not found."}), 404
+
+    try:
+        result = subprocess.run(
+            ["sudo", "bash", str(update_script)],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return jsonify({
+            "status": "ok" if result.returncode == 0 else "error",
+            "message": result.stdout[-2000:] if result.stdout else "",
+            "errors": result.stderr[-1000:] if result.stderr else "",
+            "returncode": result.returncode,
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "error", "message": "Update timed out."}), 504
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 def main():
