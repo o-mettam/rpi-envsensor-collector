@@ -13,6 +13,7 @@ Usage:
 import argparse
 import csv
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -20,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CSV_PATH = os.path.expanduser("~/envdata/sensor_data.csv")
 DEFAULT_PORT = 80
@@ -140,7 +143,8 @@ def api_restart():
     def do_restart():
         import time
         time.sleep(2)
-        subprocess.run(["/sbin/reboot"], check=False)
+        log.info("Executing system reboot...")
+        os.system("systemctl reboot")
     threading.Thread(target=do_restart, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is restarting..."})
 
@@ -151,7 +155,8 @@ def api_shutdown():
     def do_shutdown():
         import time
         time.sleep(2)
-        subprocess.run(["/sbin/shutdown", "-h", "now"], check=False)
+        log.info("Executing system shutdown...")
+        os.system("systemctl poweroff")
     threading.Thread(target=do_shutdown, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is shutting down..."})
 
