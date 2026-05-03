@@ -76,9 +76,29 @@ rpi-envsensor-collector/
 ├── templates/
 │   └── index.html        # Dashboard HTML template
 ├── install.sh            # One-step installer
+├── update.sh             # Pull & redeploy updater
 ├── setup_ap.sh           # Wi-Fi AP configuration
 └── requirements.txt      # Python dependencies
 ```
+
+## Updating
+
+To pull the latest code and redeploy without losing your data or AP config:
+
+```bash
+cd ~/rpi-envsensor-collector
+sudo bash update.sh
+```
+
+This will `git pull`, copy updated files to `/opt/envsensor-collector/`, update Python dependencies, and restart both services.
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--branch <name>` | Pull from a specific branch |
+| `--no-restart` | Deploy files but don't restart services |
+| `--force` | Discard any local changes before pulling |
 
 ## Usage
 
