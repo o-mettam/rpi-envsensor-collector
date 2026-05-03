@@ -14,7 +14,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/envsensor-collector"
-DATA_DIR="/home/pi/envdata"
 VENV_DIR="${INSTALL_DIR}/venv"
 
 # --- Checks ---
@@ -22,6 +21,11 @@ if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (sudo)."
     exit 1
 fi
+
+# Detect the real user who invoked sudo
+RUNNING_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
+RUNNING_USER_HOME=$(eval echo "~${RUNNING_USER}")
+DATA_DIR="${RUNNING_USER_HOME}/envdata"
 
 echo "========================================"
 echo " Environment Sensor HAT - Installer"
@@ -68,7 +72,7 @@ cp "${SCRIPT_DIR}/web_server.py" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/requirements.txt" "${INSTALL_DIR}/"
 
 # Set ownership
-chown -R pi:pi "${DATA_DIR}"
+chown -R "${RUNNING_USER}:${RUNNING_USER}" "${DATA_DIR}"
 chown -R root:root "${INSTALL_DIR}"
 
 # --- Create virtual environment and install Python packages ---

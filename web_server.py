@@ -19,7 +19,7 @@ from pathlib import Path
 
 from flask import Flask, render_template, jsonify
 
-DEFAULT_CSV_PATH = "/home/pi/envdata/sensor_data.csv"
+DEFAULT_CSV_PATH = os.path.expanduser("~/envdata/sensor_data.csv")
 DEFAULT_PORT = 80
 
 app = Flask(__name__, template_folder="templates")

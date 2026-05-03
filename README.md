@@ -31,7 +31,7 @@ This will:
 - Enable the I2C interface
 - Install Python dependencies (`smbus2`, `flask`)
 - Copy project files to `/opt/envsensor-collector/`
-- Create a data directory at `/home/pi/envdata/`
+- Create a data directory at `~/envdata/`
 - Set up and start two systemd services (collector + web dashboard)
 
 ### 3. Verify
@@ -99,7 +99,7 @@ sudo /opt/envsensor-collector/venv/bin/python3 collector.py --csv /tmp/test.csv
 
 ```bash
 # Run on a different port
-python3 web_server.py --port 8080 --csv /home/pi/envdata/sensor_data.csv
+python3 web_server.py --port 8080 --csv ~/envdata/sensor_data.csv
 ```
 
 ### Services
@@ -117,7 +117,7 @@ sudo systemctl disable envsensor-web
 
 ## CSV Output
 
-Data is written to `/home/pi/envdata/sensor_data.csv` with these columns:
+Data is written to `~/envdata/sensor_data.csv` with these columns:
 
 ```
 timestamp, temperature_c, humidity_pct, pressure_hpa, lux, visible,

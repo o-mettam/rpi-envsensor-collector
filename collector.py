@@ -35,7 +35,7 @@ from sensors.ltr390 import LTR390
 from sensors.sgp40 import SGP40
 from sensors.icm20948 import ICM20948
 
-DEFAULT_CSV_PATH = "/home/pi/envdata/sensor_data.csv"
+DEFAULT_CSV_PATH = os.path.expanduser("~/envdata/sensor_data.csv")
 DEFAULT_INTERVAL = 300  # 5 minutes in seconds
 I2C_BUS = 1
 
