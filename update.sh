@@ -120,6 +120,10 @@ cp "${REPO_DIR}/collector.py" "${INSTALL_DIR}/"
 cp "${REPO_DIR}/web_server.py" "${INSTALL_DIR}/"
 cp "${REPO_DIR}/requirements.txt" "${INSTALL_DIR}/"
 
+# Write version info
+GIT_DATE=$(sudo -u "${RUNNING_USER}" git -C "${REPO_DIR}" log -1 --format=%cd --date=short 2>/dev/null || date +%Y-%m-%d)
+echo "${NEW_COMMIT} (${GIT_DATE})" > "${INSTALL_DIR}/VERSION"
+
 echo "  Files copied."
 
 # --- Update Python dependencies ---

@@ -23,7 +23,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Detect the real user who invoked sudo
-RUNNING_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
+# Fall back to the owner of the script directory if SUDO_USER/logname unavailable
+RUNNING_USER="${SUDO_USER:-$(logname 2>/dev/null || stat -c '%U' "${SCRIPT_DIR}" 2>/dev/null || stat -f '%Su' "${SCRIPT_DIR}" 2>/dev/null || echo root)}"
 RUNNING_USER_HOME=$(eval echo "~${RUNNING_USER}")
 DATA_DIR="${RUNNING_USER_HOME}/envdata"
 
@@ -71,6 +72,15 @@ cp "${SCRIPT_DIR}/collector.py" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/web_server.py" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/requirements.txt" "${INSTALL_DIR}/"
 
+# Write version info
+if [ -d "${SCRIPT_DIR}/.git" ]; then
+    GIT_HASH=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    GIT_DATE=$(git -C "${SCRIPT_DIR}" log -1 --format=%cd --date=short 2>/dev/null || date +%Y-%m-%d)
+    echo "${GIT_HASH} (${GIT_DATE})" > "${INSTALL_DIR}/VERSION"
+else
+    echo "unknown ($(date +%Y-%m-%d))" > "${INSTALL_DIR}/VERSION"
+fi
+
 # Set ownership
 chown -R "${RUNNING_USER}:${RUNNING_USER}" "${DATA_DIR}"
 chown -R root:root "${INSTALL_DIR}"
@@ -88,6 +98,8 @@ cat > /etc/systemd/system/envsensor-collector.service << EOF
 Description=Environment Sensor HAT Data Collector
 After=multi-user.target
 Wants=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -96,8 +108,6 @@ ExecStart=${VENV_DIR}/bin/python3 ${INSTALL_DIR}/collector.py --csv ${DATA_DIR}/
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=30
-StartLimitBurst=5
-StartLimitIntervalSec=300
 User=root
 StandardOutput=journal
 StandardError=journal
@@ -112,6 +122,8 @@ cat > /etc/systemd/system/envsensor-web.service << EOF
 [Unit]
 Description=Environment Sensor HAT Web Dashboard
 After=network.target envsensor-collector.service
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -120,8 +132,6 @@ ExecStart=${VENV_DIR}/bin/python3 ${INSTALL_DIR}/web_server.py --csv ${DATA_DIR}
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=10
-StartLimitBurst=5
-StartLimitIntervalSec=300
 User=root
 StandardOutput=journal
 StandardError=journal

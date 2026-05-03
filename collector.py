@@ -223,16 +223,23 @@ def ensure_csv(csv_path):
 
 
 def append_row(csv_path, row):
-    """Append a data row to the CSV file."""
+    """Append a data row to the CSV file, flushing to disk to prevent corruption."""
     with open(csv_path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         writer.writerow(row)
+        f.flush()
+        os.fsync(f.fileno())
     log.info("CSV row written to %s (%d fields)", csv_path, len(row))
 
 
 def write_status(csv_path, sensors, errors):
-    """Write a JSON status file next to the CSV so the web server can report health."""
+    """Write a JSON status file next to the CSV so the web server can report health.
+
+    Uses atomic write (temp file + rename) to prevent the web server from
+    reading a partially-written file.
+    """
     status_path = Path(csv_path).with_suffix(".status.json")
+    tmp_path = status_path.with_suffix(".tmp")
     active = [k for k, v in sensors.items() if v is not None]
     status = {
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -241,8 +248,11 @@ def write_status(csv_path, sensors, errors):
         "all_ok": len(errors) == 0,
     }
     try:
-        with open(status_path, "w") as f:
+        with open(tmp_path, "w") as f:
             json.dump(status, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp_path), str(status_path))
         log.debug("Status file written: %s (active=%d, failed=%d)",
                   status_path, len(active), len(errors))
     except Exception as e:

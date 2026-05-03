@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Environment Sensor Dashboard</title>
     <meta http-equiv="refresh" content="60">
     <style>
@@ -385,6 +385,39 @@
         .toast.success { border-color: var(--green); }
         .toast.error { border-color: var(--red); }
 
+        /* Mobile responsive */
+        @media (max-width: 480px) {
+            body {
+                padding: 0.5rem;
+                padding-top: max(0.5rem, env(safe-area-inset-top));
+                padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+            }
+            .header h1 { font-size: 1.2rem; }
+            .header { padding: 1rem 0 0.75rem; }
+            .cards {
+                grid-template-columns: 1fr;
+                gap: 0.75rem;
+            }
+            .card { padding: 1rem; }
+            .metric .value { font-size: 1.1rem; }
+            .metric .value[style*="font-size:1rem"] { font-size: 0.85rem !important; }
+            .metric .label { font-size: 0.8rem; }
+            table { font-size: 0.7rem; }
+            th, td { padding: 0.35rem 0.4rem; }
+            .settings-panel { width: 100vw; right: -100vw; }
+            .settings-btn {
+                top: max(0.75rem, env(safe-area-inset-top));
+                right: max(0.75rem, env(safe-area-inset-right));
+            }
+            .warning-banner { padding: 0.75rem 1rem; }
+        }
+
+        @media (max-width: 360px) {
+            .header h1 { font-size: 1rem; }
+            .metric .value { font-size: 1rem; }
+            .card h2 { font-size: 0.7rem; }
+        }
+
     </style>
 </head>
 <body>
@@ -417,6 +450,13 @@
 
     <div class="settings-section">
         <h3>Software</h3>
+        <div class="settings-item" style="cursor:default;">
+            <span class="item-label">
+                <span class="item-icon">&#9881;</span>
+                Version
+            </span>
+            <span style="font-size:0.8rem;color:var(--text-muted);font-family:monospace;">{{ version or 'unknown' }}</span>
+        </div>
         <div class="settings-item" onclick="doUpdate()">
             <span class="item-label">
                 <span class="item-icon">&#8635;</span>

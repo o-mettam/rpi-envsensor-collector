@@ -64,33 +64,91 @@ def log_response(response):
     return response
 
 
+def _convert_row(row):
+    """Convert numeric string fields in a CSV row dict to int/float."""
+    for key in row:
+        if key == "timestamp":
+            continue
+        try:
+            val = row[key]
+            if val == "":
+                continue
+            if "." in str(val):
+                row[key] = float(val)
+            else:
+                row[key] = int(val)
+        except (ValueError, TypeError):
+            pass
+    return row
+
+
+def _tail_lines(filepath, n):
+    """Read the last n lines of a file efficiently by seeking from the end."""
+    with open(filepath, "rb") as f:
+        # Jump to end
+        f.seek(0, 2)
+        size = f.tell()
+        if size == 0:
+            return []
+
+        lines = []
+        block_size = 4096
+        remaining = size
+        data = b""
+
+        while remaining > 0 and len(lines) <= n:
+            read_size = min(block_size, remaining)
+            remaining -= read_size
+            f.seek(remaining)
+            data = f.read(read_size) + data
+            lines = data.split(b"\n")
+
+        # Return last n non-empty lines
+        lines = [l for l in lines if l.strip()]
+        return [l.decode("utf-8", errors="replace") for l in lines[-n:]]
+
+
 def read_csv_data(limit=None):
     """Read sensor data from CSV file. Returns list of dicts (newest first)."""
     path = Path(csv_path)
     if not path.exists():
         return []
 
-    rows = []
-    with open(path, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            # Convert numeric fields
-            for key in row:
-                if key == "timestamp":
-                    continue
+    try:
+        if limit:
+            # Efficient: read only the header + last N lines
+            with open(path, "r") as f:
+                header_line = f.readline().strip()
+            if not header_line:
+                return []
+            fieldnames = header_line.split(",")
+            tail = _tail_lines(str(path), limit)
+            rows = []
+            for line in tail:
+                if line.strip() == header_line:
+                    continue  # Skip if we happened to grab the header
                 try:
-                    if "." in str(row[key]):
-                        row[key] = float(row[key])
-                    elif row[key] != "":
-                        row[key] = int(row[key])
-                except (ValueError, TypeError):
-                    pass
-            rows.append(row)
-
-    rows.reverse()  # Newest first
-    if limit:
-        rows = rows[:limit]
-    return rows
+                    parsed = dict(zip(fieldnames, line.split(",")))
+                    rows.append(_convert_row(parsed))
+                except Exception:
+                    log.debug("Skipping malformed CSV line: %s", line[:80])
+            rows.reverse()  # Newest first
+            return rows
+        else:
+            # Full read (for /api/data and CSV download)
+            rows = []
+            with open(path, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        rows.append(_convert_row(row))
+                    except Exception:
+                        log.debug("Skipping malformed CSV row")
+            rows.reverse()
+            return rows
+    except Exception as e:
+        log.error("Error reading CSV: %s", e)
+        return []
 
 
 def get_latest_reading():
@@ -123,16 +181,28 @@ def read_status():
         }
 
 
+def get_version():
+    """Read the software version from the VERSION file."""
+    version_path = Path(app.root_path) / "VERSION"
+    if version_path.exists():
+        try:
+            return version_path.read_text().strip()
+        except Exception:
+            return "unknown"
+    return "unknown"
+
+
 @app.route("/")
 def index():
     """Main dashboard page."""
     latest = get_latest_reading()
     status = read_status()
+    version = get_version()
     log.info("Dashboard: latest=%s, status_ok=%s, active_sensors=%s",
              "yes" if latest else "no",
              status.get("all_ok"),
              status.get("active_sensors", []))
-    return render_template("index.html", latest=latest, status=status)
+    return render_template("index.html", latest=latest, status=status, version=version)
 
 
 @app.route("/api/latest")
