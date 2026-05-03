@@ -69,8 +69,9 @@ if [ ! -d "${REPO_DIR}/.git" ]; then
     exit 1
 fi
 
-# Detect the real user for git operations
-RUNNING_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
+# Detect the real user for git operations — use the owner of the repo directory
+# (SUDO_USER may not be set when called from the web server)
+RUNNING_USER="${SUDO_USER:-$(stat -c '%U' "${REPO_DIR}" 2>/dev/null || stat -f '%Su' "${REPO_DIR}" 2>/dev/null || echo root)}"
 
 echo "========================================"
 echo " Environment Sensor HAT - Updater"
