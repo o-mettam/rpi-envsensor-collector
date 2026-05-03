@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -182,13 +183,26 @@ def read_status():
 
 
 def get_version():
-    """Read the software version from the VERSION file."""
+    """Read the software version from the VERSION file, or detect from git."""
     version_path = Path(app.root_path) / "VERSION"
     if version_path.exists():
         try:
             return version_path.read_text().strip()
         except Exception:
-            return "unknown"
+            pass
+
+    # Fallback: try to read git info directly from the repo
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%h (%cd)", "--date=short"],
+            cwd=app.root_path,
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+
     return "unknown"
 
 
@@ -280,24 +294,106 @@ def api_shutdown():
     return jsonify({"status": "ok", "message": "Device is shutting down..."})
 
 
+# --- Update progress tracking ---
+_update_progress = {
+    "running": False,
+    "step": 0,
+    "total_steps": 4,
+    "step_label": "",
+    "done": False,
+    "success": False,
+    "error": "",
+}
+_update_progress_lock = threading.Lock()
+
+_UPDATE_STEPS = {
+    "[1/4]": "Pulling latest code...",
+    "[2/4]": "Deploying files...",
+    "[3/4]": "Updating dependencies...",
+    "[4/4]": "Restarting services...",
+}
+
+
+def _run_update(repo_dir, update_script):
+    """Run the update script in a thread, tracking progress by parsing output."""
+    global _update_progress
+    try:
+        proc = subprocess.Popen(
+            ["/bin/bash", str(update_script)],
+            cwd=str(repo_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+        output_lines = []
+        for line in proc.stdout:
+            output_lines.append(line)
+            stripped = line.strip()
+            log.info("update.sh: %s", stripped)
+
+            # Detect step markers from update.sh output
+            for marker, label in _UPDATE_STEPS.items():
+                if marker in stripped:
+                    step_num = int(marker[1])
+                    with _update_progress_lock:
+                        _update_progress["step"] = step_num
+                        _update_progress["step_label"] = label
+                    break
+
+            # Detect early exit (already up to date)
+            if "Already up to date" in stripped:
+                with _update_progress_lock:
+                    _update_progress["step"] = 4
+                    _update_progress["step_label"] = "Already up to date."
+
+        proc.wait(timeout=120)
+
+        with _update_progress_lock:
+            _update_progress["running"] = False
+            _update_progress["done"] = True
+            _update_progress["success"] = proc.returncode == 0
+            if proc.returncode == 0:
+                _update_progress["step"] = 4
+                _update_progress["step_label"] = "Update complete!"
+            else:
+                _update_progress["error"] = "".join(output_lines[-10:])
+                _update_progress["step_label"] = "Update failed."
+
+        if proc.returncode == 0:
+            log.info("Update completed successfully")
+        else:
+            log.error("Update failed (exit code %d)", proc.returncode)
+
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        with _update_progress_lock:
+            _update_progress["running"] = False
+            _update_progress["done"] = True
+            _update_progress["success"] = False
+            _update_progress["error"] = "Update timed out after 120 seconds."
+            _update_progress["step_label"] = "Timed out."
+        log.error("Update timed out after 120 seconds")
+    except Exception as e:
+        with _update_progress_lock:
+            _update_progress["running"] = False
+            _update_progress["done"] = True
+            _update_progress["success"] = False
+            _update_progress["error"] = str(e)
+            _update_progress["step_label"] = "Error."
+        log.exception("Update failed with exception: %s", e)
+
+
 @app.route("/api/update", methods=["POST"])
 def api_update():
-    """Pull latest code and redeploy via update.sh."""
-    # Look for the git repo: check every user's home directory under /home/
-    repo_dir = None
-    home_base = Path("/home")
-    if home_base.is_dir():
-        for user_dir in sorted(home_base.iterdir()):
-            candidate = user_dir / "rpi-envsensor-collector"
-            if candidate.is_dir() and (candidate / ".git").is_dir():
-                repo_dir = candidate
-                break
-    # Also check /root in case cloned there
-    if not repo_dir:
-        candidate = Path("/root") / "rpi-envsensor-collector"
-        if candidate.is_dir() and (candidate / ".git").is_dir():
-            repo_dir = candidate
+    """Start the update process (runs in background)."""
+    global _update_progress
 
+    with _update_progress_lock:
+        if _update_progress["running"]:
+            return jsonify({"status": "error", "message": "Update already in progress."}), 409
+
+    repo_dir = _find_repo_dir()
     if not repo_dir:
         log.error("Update requested but git repository not found under /home/*/")
         return jsonify({"status": "error", "message": "Git repository not found."}), 404
@@ -308,34 +404,123 @@ def api_update():
         return jsonify({"status": "error", "message": "update.sh not found."}), 404
 
     log.info("Software update requested from %s — repo: %s", request.remote_addr, repo_dir)
-    try:
-        result = subprocess.run(
-            ["/bin/bash", str(update_script)],
-            cwd=str(repo_dir),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            log.info("Update completed successfully")
-        else:
-            log.error("Update failed (exit code %d): %s", result.returncode, result.stderr[-500:] if result.stderr else "")
-        if result.stdout:
-            log.info("Update stdout:\n%s", result.stdout[-2000:])
-        if result.stderr:
-            log.warning("Update stderr:\n%s", result.stderr[-1000:])
-        return jsonify({
-            "status": "ok" if result.returncode == 0 else "error",
-            "message": result.stdout[-2000:] if result.stdout else "",
-            "errors": result.stderr[-1000:] if result.stderr else "",
-            "returncode": result.returncode,
-        })
-    except subprocess.TimeoutExpired:
-        log.error("Update timed out after 120 seconds")
-        return jsonify({"status": "error", "message": "Update timed out."}), 504
-    except Exception as e:
-        log.exception("Update failed with exception: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+
+    with _update_progress_lock:
+        _update_progress = {
+            "running": True,
+            "step": 0,
+            "total_steps": 4,
+            "step_label": "Starting update...",
+            "done": False,
+            "success": False,
+            "error": "",
+        }
+
+    threading.Thread(target=_run_update, args=(repo_dir, update_script), daemon=True).start()
+    return jsonify({"status": "ok", "message": "Update started."})
+
+
+@app.route("/api/update-status")
+def api_update_status():
+    """API endpoint: get current update progress."""
+    with _update_progress_lock:
+        return jsonify(_update_progress)
+
+
+def _find_repo_dir():
+    """Locate the git repository directory."""
+    home_base = Path("/home")
+    if home_base.is_dir():
+        for user_dir in sorted(home_base.iterdir()):
+            candidate = user_dir / "rpi-envsensor-collector"
+            if candidate.is_dir() and (candidate / ".git").is_dir():
+                return candidate
+    candidate = Path("/root") / "rpi-envsensor-collector"
+    if candidate.is_dir() and (candidate / ".git").is_dir():
+        return candidate
+    return None
+
+
+# --- Update availability checker (background thread) ---
+_update_status = {"available": False, "local": None, "remote": None, "checked": None}
+_update_lock = threading.Lock()
+
+
+def _check_for_updates():
+    """Background task: periodically check if remote has new commits."""
+    import socket
+    while True:
+        time.sleep(300)  # Check every 5 minutes
+
+        # Quick internet connectivity test (no cloud dependency — just DNS resolve)
+        try:
+            socket.setdefaulttimeout(5)
+            socket.getaddrinfo("github.com", 443)
+        except (socket.gaierror, socket.timeout, OSError):
+            log.debug("Update check skipped — no internet connectivity")
+            continue
+
+        repo_dir = _find_repo_dir()
+        if not repo_dir:
+            continue
+
+        try:
+            # Detect repo owner for git commands
+            stat_result = repo_dir.stat()
+            import pwd
+            try:
+                repo_user = pwd.getpwuid(stat_result.st_uid).pw_name
+            except KeyError:
+                repo_user = "root"
+
+            # Fetch latest remote refs
+            fetch = subprocess.run(
+                ["sudo", "-u", repo_user, "git", "fetch", "--quiet"],
+                cwd=str(repo_dir),
+                capture_output=True, text=True, timeout=30,
+            )
+            if fetch.returncode != 0:
+                log.debug("Update check: git fetch failed: %s", fetch.stderr.strip())
+                continue
+
+            # Compare local HEAD vs remote tracking branch
+            local = subprocess.run(
+                ["sudo", "-u", repo_user, "git", "rev-parse", "HEAD"],
+                cwd=str(repo_dir),
+                capture_output=True, text=True, timeout=5,
+            )
+            remote = subprocess.run(
+                ["sudo", "-u", repo_user, "git", "rev-parse", "@{u}"],
+                cwd=str(repo_dir),
+                capture_output=True, text=True, timeout=5,
+            )
+
+            if local.returncode == 0 and remote.returncode == 0:
+                local_hash = local.stdout.strip()
+                remote_hash = remote.stdout.strip()
+                available = local_hash != remote_hash
+
+                with _update_lock:
+                    _update_status["available"] = available
+                    _update_status["local"] = local_hash[:7]
+                    _update_status["remote"] = remote_hash[:7]
+                    _update_status["checked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                if available:
+                    log.info("Update available: local=%s remote=%s", local_hash[:7], remote_hash[:7])
+                else:
+                    log.debug("Update check: already up to date (%s)", local_hash[:7])
+        except subprocess.TimeoutExpired:
+            log.debug("Update check: timed out")
+        except Exception as e:
+            log.debug("Update check failed: %s", e)
+
+
+@app.route("/api/update-available")
+def api_update_available():
+    """API endpoint: check if a software update is available."""
+    with _update_lock:
+        return jsonify(_update_status)
 
 
 def main():
@@ -373,6 +558,13 @@ def main():
     log.info("PID:       %d", os.getpid())
     log.info("User:      %s (uid=%d)", os.environ.get('USER', 'unknown'), os.getuid())
     log.info("========================================")
+
+    # Start background update checker (only in the main process, not reloader)
+    if not args.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        update_thread = threading.Thread(target=_check_for_updates, daemon=True)
+        update_thread.start()
+        log.info("Background update checker started (interval: 5 min)")
+
     app.run(host="0.0.0.0", port=args.port, debug=args.debug)
 
 
