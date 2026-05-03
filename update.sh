@@ -105,7 +105,7 @@ echo "  Updated: ${CURRENT_COMMIT} -> ${NEW_COMMIT}"
 
 if [ "${CURRENT_COMMIT}" = "${NEW_COMMIT}" ]; then
     echo ""
-    echo "  Already up to date. No changes to deploy."
+    echo "  Already up to date. No changes to add."
     echo ""
     exit 0
 fi
