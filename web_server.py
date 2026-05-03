@@ -140,7 +140,7 @@ def api_restart():
     def do_restart():
         import time
         time.sleep(2)
-        subprocess.run(["sudo", "reboot"], check=False)
+        subprocess.run(["/sbin/reboot"], check=False)
     threading.Thread(target=do_restart, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is restarting..."})
 
@@ -151,7 +151,7 @@ def api_shutdown():
     def do_shutdown():
         import time
         time.sleep(2)
-        subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
+        subprocess.run(["/sbin/shutdown", "-h", "now"], check=False)
     threading.Thread(target=do_shutdown, daemon=True).start()
     return jsonify({"status": "ok", "message": "Device is shutting down..."})
 
@@ -159,17 +159,20 @@ def api_shutdown():
 @app.route("/api/update", methods=["POST"])
 def api_update():
     """Pull latest code and redeploy via update.sh."""
-    install_dir = Path("/opt/envsensor-collector")
-    # Look for the git repo in common locations
-    repo_candidates = [
-        Path.home() / "rpi-envsensor-collector",
-        Path("/home") / "pi" / "rpi-envsensor-collector",
-    ]
+    # Look for the git repo: check every user's home directory under /home/
     repo_dir = None
-    for candidate in repo_candidates:
-        if (candidate / ".git").is_dir():
+    home_base = Path("/home")
+    if home_base.is_dir():
+        for user_dir in sorted(home_base.iterdir()):
+            candidate = user_dir / "rpi-envsensor-collector"
+            if candidate.is_dir() and (candidate / ".git").is_dir():
+                repo_dir = candidate
+                break
+    # Also check /root in case cloned there
+    if not repo_dir:
+        candidate = Path("/root") / "rpi-envsensor-collector"
+        if candidate.is_dir() and (candidate / ".git").is_dir():
             repo_dir = candidate
-            break
 
     if not repo_dir:
         return jsonify({"status": "error", "message": "Git repository not found."}), 404
@@ -180,7 +183,7 @@ def api_update():
 
     try:
         result = subprocess.run(
-            ["sudo", "bash", str(update_script)],
+            ["/bin/bash", str(update_script)],
             cwd=str(repo_dir),
             capture_output=True,
             text=True,
