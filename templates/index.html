@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Environment Sensor Dashboard</title>
+    <meta http-equiv="refresh" content="60">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --green: #4ade80;
+            --yellow: #facc15;
+            --red: #f87171;
+            --purple: #c084fc;
+            --orange: #fb923c;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        .header {
+            text-align: center;
+            padding: 1.5rem 0 1rem;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .header .timestamp {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+        .header .status {
+            display: inline-block;
+            width: 8px; height: 8px;
+            background: var(--green);
+            border-radius: 50%;
+            margin-right: 0.35rem;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            max-width: 1200px;
+            margin: 1rem auto;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem;
+        }
+        .card h2 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .metric:last-child { border-bottom: none; }
+        .metric .label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        .metric .value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .metric .unit {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 400;
+            margin-left: 2px;
+        }
+
+        .color-temp { color: var(--red); }
+        .color-hum { color: var(--accent); }
+        .color-press { color: var(--purple); }
+        .color-lux { color: var(--yellow); }
+        .color-uv { color: var(--orange); }
+        .color-voc { color: var(--green); }
+        .color-motion { color: var(--text); }
+
+        /* History table */
+        .table-wrapper {
+            max-width: 1200px;
+            margin: 2rem auto;
+            overflow-x: auto;
+        }
+        .table-wrapper h2 {
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-muted);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        th, td {
+            padding: 0.5rem 0.6rem;
+            text-align: right;
+            white-space: nowrap;
+            border-bottom: 1px solid var(--border);
+        }
+        th {
+            position: sticky;
+            top: 0;
+            background: var(--surface);
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 0.05em;
+        }
+        th:first-child, td:first-child { text-align: left; }
+        tr:hover td { background: rgba(56, 189, 248, 0.05); }
+
+        .actions {
+            text-align: center;
+            margin: 1.5rem 0;
+        }
+        .actions a {
+            display: inline-block;
+            padding: 0.5rem 1.5rem;
+            background: var(--accent);
+            color: var(--bg);
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        .actions a:hover { opacity: 0.85; }
+
+        .no-data {
+            text-align: center;
+            padding: 4rem 1rem;
+            color: var(--text-muted);
+        }
+        .no-data h2 { font-size: 1.2rem; color: var(--text); margin-bottom: 0.5rem; }
+
+        .footer {
+            text-align: center;
+            padding: 2rem 0 1rem;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        .warning-banner {
+            max-width: 1200px;
+            margin: 0 auto 1rem;
+            background: rgba(248, 113, 113, 0.12);
+            border: 1px solid var(--red);
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+        }
+        .warning-banner .warning-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: var(--red);
+            margin-bottom: 0.4rem;
+        }
+        .warning-banner .warning-icon {
+            font-size: 1.1rem;
+        }
+        .warning-banner .warning-body {
+            font-size: 0.85rem;
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .warning-banner .failed-list {
+            margin-top: 0.35rem;
+            padding-left: 1.2rem;
+            color: var(--text-muted);
+        }
+        .warning-banner .failed-list li {
+            margin-bottom: 0.15rem;
+        }
+        .warning-banner .failed-list .sensor-name {
+            color: var(--text);
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>🌡️ Environment Sensor Dashboard</h1>
+    {% if latest %}
+    <p class="timestamp">
+        <span class="status"></span>
+        Last reading: {{ latest.timestamp }}
+    </p>
+    {% endif %}
+</div>
+
+{% if status and not status.all_ok %}
+<div class="warning-banner">
+    {% if status.collector_missing is defined and status.collector_missing %}
+    <div class="warning-title">
+        <span class="warning-icon">&#9888;</span>
+        Collector Not Running
+    </div>
+    <div class="warning-body">
+        The sensor collector service has not started or has not written a status file yet.
+        Check that the service is running:
+        <code>sudo systemctl status envsensor-collector</code>
+    </div>
+    {% else %}
+    <div class="warning-title">
+        <span class="warning-icon">&#9888;</span>
+        Sensor Issue Detected
+    </div>
+    <div class="warning-body">
+        {{ status.failed_sensors | length }} of {{ (status.active_sensors | length) + (status.failed_sensors | length) }} sensors failed to initialize. The collector is still running and will retry automatically.
+        <ul class="failed-list">
+        {% for name, error in status.failed_sensors.items() %}
+            <li><span class="sensor-name">{{ name }}</span> &mdash; {{ error }}</li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if latest %}
+<div class="cards">
+    <!-- Temperature / Humidity / Pressure -->
+    <div class="card">
+        <h2>Climate</h2>
+        {% if latest.temperature_c is not none and latest.temperature_c != '' %}
+        <div class="metric">
+            <span class="label">Temperature</span>
+            <span class="value color-temp">{{ latest.temperature_c }}<span class="unit">°C</span></span>
+        </div>
+        {% endif %}
+        {% if latest.humidity_pct is not none and latest.humidity_pct != '' %}
+        <div class="metric">
+            <span class="label">Humidity</span>
+            <span class="value color-hum">{{ latest.humidity_pct }}<span class="unit">%</span></span>
+        </div>
+        {% endif %}
+        {% if latest.pressure_hpa is not none and latest.pressure_hpa != '' %}
+        <div class="metric">
+            <span class="label">Pressure</span>
+            <span class="value color-press">{{ latest.pressure_hpa }}<span class="unit">hPa</span></span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Light -->
+    <div class="card">
+        <h2>Light</h2>
+        {% if latest.lux is not none and latest.lux != '' %}
+        <div class="metric">
+            <span class="label">Illuminance</span>
+            <span class="value color-lux">{{ latest.lux }}<span class="unit">lux</span></span>
+        </div>
+        {% endif %}
+        {% if latest.visible is not none and latest.visible != '' %}
+        <div class="metric">
+            <span class="label">Visible Light</span>
+            <span class="value color-lux">{{ latest.visible }}</span>
+        </div>
+        {% endif %}
+        {% if latest.infrared is not none and latest.infrared != '' %}
+        <div class="metric">
+            <span class="label">Infrared</span>
+            <span class="value color-lux">{{ latest.infrared }}</span>
+        </div>
+        {% endif %}
+        {% if latest.als_lux is not none and latest.als_lux != '' %}
+        <div class="metric">
+            <span class="label">ALS Lux</span>
+            <span class="value color-lux">{{ latest.als_lux }}<span class="unit">lux</span></span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- UV -->
+    <div class="card">
+        <h2>UV Radiation</h2>
+        {% if latest.uv_index is not none and latest.uv_index != '' %}
+        <div class="metric">
+            <span class="label">UV Index</span>
+            <span class="value color-uv">{{ latest.uv_index }}</span>
+        </div>
+        {% endif %}
+        {% if latest.uv_raw is not none and latest.uv_raw != '' %}
+        <div class="metric">
+            <span class="label">UV Raw</span>
+            <span class="value color-uv">{{ latest.uv_raw }}</span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- VOC -->
+    <div class="card">
+        <h2>Air Quality</h2>
+        {% if latest.voc_index is not none and latest.voc_index != '' %}
+        <div class="metric">
+            <span class="label">VOC Index</span>
+            <span class="value color-voc">{{ latest.voc_index }}</span>
+        </div>
+        {% endif %}
+        {% if latest.voc_raw is not none and latest.voc_raw != '' %}
+        <div class="metric">
+            <span class="label">VOC Raw</span>
+            <span class="value color-voc">{{ latest.voc_raw }}</span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Motion -->
+    <div class="card">
+        <h2>Motion / Orientation</h2>
+        {% if latest.accel_x_g is not none and latest.accel_x_g != '' %}
+        <div class="metric">
+            <span class="label">Accel X / Y / Z</span>
+            <span class="value color-motion" style="font-size:1rem">
+                {{ latest.accel_x_g }} / {{ latest.accel_y_g }} / {{ latest.accel_z_g }}
+                <span class="unit">g</span>
+            </span>
+        </div>
+        {% endif %}
+        {% if latest.gyro_x_dps is not none and latest.gyro_x_dps != '' %}
+        <div class="metric">
+            <span class="label">Gyro X / Y / Z</span>
+            <span class="value color-motion" style="font-size:1rem">
+                {{ latest.gyro_x_dps }} / {{ latest.gyro_y_dps }} / {{ latest.gyro_z_dps }}
+                <span class="unit">°/s</span>
+            </span>
+        </div>
+        {% endif %}
+        {% if latest.mag_x_ut is not none and latest.mag_x_ut != '' %}
+        <div class="metric">
+            <span class="label">Mag X / Y / Z</span>
+            <span class="value color-motion" style="font-size:1rem">
+                {{ latest.mag_x_ut }} / {{ latest.mag_y_ut }} / {{ latest.mag_z_ut }}
+                <span class="unit">µT</span>
+            </span>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- History table (loaded via JS) -->
+<div class="table-wrapper">
+    <h2>📊 Recent History</h2>
+    <table id="history-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Temp °C</th>
+                <th>Hum %</th>
+                <th>Press hPa</th>
+                <th>Lux</th>
+                <th>UV Index</th>
+                <th>VOC Raw</th>
+            </tr>
+        </thead>
+        <tbody id="history-body">
+            <tr><td colspan="7" style="text-align:center;color:var(--text-muted)">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="actions">
+    <a href="/csv">⬇ Download CSV</a>
+</div>
+
+{% else %}
+<div class="no-data">
+    <h2>No Data Yet</h2>
+    <p>Waiting for the collector to record the first reading...</p>
+    <p style="margin-top:0.5rem">This page auto-refreshes every 60 seconds.</p>
+</div>
+{% endif %}
+
+<div class="footer">
+    Waveshare Environment Sensor HAT &middot; Raspberry Pi
+</div>
+
+<script>
+    // Load history data via API
+    fetch('/api/data/288')
+        .then(r => r.json())
+        .then(data => {
+            const tbody = document.getElementById('history-body');
+            if (!data.length) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No data</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.map(row => `
+                <tr>
+                    <td>${row.timestamp || ''}</td>
+                    <td>${row.temperature_c ?? ''}</td>
+                    <td>${row.humidity_pct ?? ''}</td>
+                    <td>${row.pressure_hpa ?? ''}</td>
+                    <td>${row.lux ?? ''}</td>
+                    <td>${row.uv_index ?? ''}</td>
+                    <td>${row.voc_raw ?? ''}</td>
+                </tr>
+            `).join('');
+        })
+        .catch(() => {
+            document.getElementById('history-body').innerHTML =
+                '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">Failed to load data</td></tr>';
+        });
+</script>
+</body>
+</html>
