@@ -17,7 +17,7 @@ Raspberry Pi data collector for the [Waveshare Environment Sensor HAT](https://w
 ### 1. Clone to your Raspberry Pi
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/rpi-envsensor-collector.git
+git clone https://github.com/o-mettam/rpi-envsensor-collector.git
 cd rpi-envsensor-collector
 ```
 
