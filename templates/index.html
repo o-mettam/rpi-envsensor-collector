@@ -575,6 +575,35 @@
     </div>
 
     <div class="settings-section">
+        <h3>Battery</h3>
+        <div class="settings-item" style="cursor:default;" id="battery-item">
+            <span class="item-label">
+                <span class="item-icon">&#128267;</span>
+                <span id="battery-label">Battery</span>
+            </span>
+            <span id="battery-value" style="font-size:0.85rem;color:var(--text-muted);font-family:monospace;">Loading...</span>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Data</h3>
+        <div class="settings-item" onclick="doPoll()">
+            <span class="item-label">
+                <span class="item-icon">&#128260;</span>
+                Poll Sensors Now
+            </span>
+            <span class="item-arrow">&#8250;</span>
+        </div>
+        <div class="settings-item danger" onclick="doClearData()">
+            <span class="item-label">
+                <span class="item-icon">&#128465;</span>
+                Clear All Data
+            </span>
+            <span class="item-arrow">&#8250;</span>
+        </div>
+    </div>
+
+    <div class="settings-section">
         <h3>Device</h3>
         <form method="POST" action="/api/restart" onsubmit="return confirm('Restart the device? You will lose connection temporarily.')">
             <button type="submit" class="settings-item" style="width:100%;text-align:left;font:inherit;cursor:pointer;">
@@ -937,6 +966,62 @@
         sessionStorage.setItem('update-dismissed', '1');
     }
     checkForUpdates();
+
+    // ---- Manual poll ----
+    function doPoll() {
+        if (!confirm('Trigger an immediate sensor reading?')) return;
+        fetch('/api/poll', { method: 'POST' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'ok') {
+                    showToast(d.message, 'success');
+                    setTimeout(() => location.reload(), 3000);
+                } else {
+                    showToast(d.message || 'Poll failed.', 'error');
+                }
+            })
+            .catch(() => showToast('Failed to connect.', 'error'));
+    }
+
+    // ---- Clear all data ----
+    function doClearData() {
+        if (!confirm('Delete ALL collected sensor data? This cannot be undone.')) return;
+        fetch('/api/clear-data', { method: 'POST' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'ok') {
+                    showToast(d.message, 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast(d.message || 'Failed to clear data.', 'error');
+                }
+            })
+            .catch(() => showToast('Failed to connect.', 'error'));
+    }
+
+    // ---- Battery status (PiSugar 2) ----
+    function fetchBattery() {
+        fetch('/api/battery')
+            .then(r => r.json())
+            .then(d => {
+                const el = document.getElementById('battery-value');
+                if (d.battery_pct !== undefined) {
+                    var icon = d.charging ? '&#9889; ' : '';
+                    var color = d.battery_pct > 50 ? 'var(--green)' : d.battery_pct > 20 ? 'var(--yellow)' : 'var(--red)';
+                    el.innerHTML = icon + '<span style="color:' + color + '">' + d.battery_pct.toFixed(1) + '%</span>';
+                    if (d.charging) {
+                        document.getElementById('battery-label').textContent = 'Battery (charging)';
+                    }
+                } else {
+                    el.textContent = d.message || 'Unavailable';
+                }
+            })
+            .catch(() => {
+                document.getElementById('battery-value').textContent = 'Unavailable';
+            });
+    }
+    fetchBattery();
+    setInterval(fetchBattery, 30000);
 
     // ---- Load history data ----
     fetch('/api/data/288')

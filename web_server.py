@@ -15,6 +15,8 @@ import csv
 import json
 import logging
 import os
+import signal
+import socket
 import subprocess
 import threading
 import time
@@ -262,6 +264,95 @@ def download_csv():
         "Content-Type": "text/csv",
         "Content-Disposition": "attachment; filename=sensor_data.csv",
     }
+
+
+@app.route("/api/poll", methods=["POST"])
+def api_poll():
+    """Trigger an immediate sensor reading by sending SIGUSR1 to the collector."""
+    log.info("Manual poll requested from %s", request.remote_addr)
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "collector.py"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip()]
+        if not pids:
+            log.warning("Poll request failed: collector process not found")
+            return jsonify({"status": "error", "message": "Collector process not found."}), 404
+
+        for pid in pids:
+            os.kill(int(pid), signal.SIGUSR1)
+            log.info("Sent SIGUSR1 to collector PID %s", pid)
+
+        return jsonify({"status": "ok", "message": "Poll triggered. New reading will appear shortly."})
+    except Exception as e:
+        log.error("Failed to trigger poll: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/clear-data", methods=["POST"])
+def api_clear_data():
+    """Delete all collected sensor data (keeps CSV header)."""
+    log.info("Clear data requested from %s", request.remote_addr)
+    path = Path(csv_path)
+    if not path.exists():
+        return jsonify({"status": "ok", "message": "No data file to clear."})
+
+    try:
+        # Read the header line
+        with open(path, "r") as f:
+            header = f.readline()
+
+        # Rewrite file with only the header
+        with open(path, "w") as f:
+            f.write(header)
+            f.flush()
+            os.fsync(f.fileno())
+
+        log.info("Sensor data cleared. CSV reset to header only.")
+        return jsonify({"status": "ok", "message": "All sensor data has been deleted."})
+    except Exception as e:
+        log.error("Failed to clear data: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/battery")
+def api_battery():
+    """Get battery percentage from PiSugar 2 power manager."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        sock.connect("/tmp/pisugar-server.sock")
+
+        # Request battery level
+        sock.sendall(b"get battery\n")
+        response = sock.recv(256).decode("utf-8").strip()
+        # Response format: "battery: 75.50"
+        battery_pct = None
+        if ":" in response:
+            try:
+                battery_pct = float(response.split(":")[1].strip())
+            except (ValueError, IndexError):
+                pass
+
+        # Request charging status
+        sock.sendall(b"get battery_charging\n")
+        charge_resp = sock.recv(256).decode("utf-8").strip()
+        charging = "true" in charge_resp.lower()
+
+        sock.close()
+
+        if battery_pct is not None:
+            return jsonify({"battery_pct": round(battery_pct, 1), "charging": charging})
+        else:
+            return jsonify({"status": "error", "message": "Could not parse battery response."}), 500
+    except FileNotFoundError:
+        return jsonify({"status": "error", "message": "PiSugar daemon not running (socket not found)."}), 503
+    except socket.timeout:
+        return jsonify({"status": "error", "message": "PiSugar daemon not responding."}), 503
+    except Exception as e:
+        log.error("Battery check failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/restart", methods=["POST"])

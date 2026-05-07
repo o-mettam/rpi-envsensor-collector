@@ -77,12 +77,19 @@ logging.basicConfig(
 log = logging.getLogger("collector")
 
 running = True
+poll_now = False
 
 
 def signal_handler(signum, frame):
     global running
     log.info("Shutdown signal received, stopping...")
     running = False
+
+
+def poll_signal_handler(signum, frame):
+    global poll_now
+    log.info("Manual poll signal (SIGUSR1) received, triggering immediate read...")
+    poll_now = True
 
 
 SENSOR_CLASSES = [
@@ -290,6 +297,7 @@ def main():
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGUSR1, poll_signal_handler)
 
     log.info("========================================")
     log.info(" Environment Sensor Collector")
@@ -350,8 +358,13 @@ def main():
                 break
 
             # Sleep in small increments so we can respond to signals
+            global poll_now
             for _ in range(args.interval):
                 if not running:
+                    break
+                if poll_now:
+                    poll_now = False
+                    log.info("Breaking sleep early due to manual poll request")
                     break
                 time.sleep(1)
 
